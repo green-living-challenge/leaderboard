@@ -15,7 +15,7 @@
   // ---------- section A: dates, state, challenge lists, addresses ----------
 
   var TIMEZONE = 'Asia/Dubai';
-  var TIMING = { slowMs: 4000, giveUpMs: 20000, staleSyncMinutes: 30 };
+  var TIMING = { slowMs: 4000, giveUpMs: 20000, staleSyncMinutes: 30, copyMs: 6000 };
   var STATES = ['upcoming', 'live', 'ended', 'final'];
   var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   var DAY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -612,6 +612,19 @@
     return when ? 'Showing saved results, last changed ' + when + '.' : 'Showing saved results.';
   }
 
+  // The fresh payload, unless the one showing is provably newer. The public copy
+  // runs a few minutes behind the API, so a reload after an API answer must not
+  // step back to older points.
+  function newerPayload(current, fresh) {
+    function time(p) {
+      var ms = isObject(p) ? Date.parse(p.updatedAt || p.generatedAt) : NaN;
+      return isFinite(ms) ? ms : NaN;
+    }
+    var a = time(current);
+    var b = time(fresh);
+    return isFinite(a) && isFinite(b) && a > b ? current : fresh;
+  }
+
   // Spec section 7: syncedAt null or more than 30 minutes old while a challenge is live.
   function scoresDelayed(syncedAt, nowMs, state) {
     if (state !== 'live') return false;
@@ -664,6 +677,7 @@
     checkPayload: checkPayload,
     screenFor: screenFor,
     savedText: savedText,
+    newerPayload: newerPayload,
     scoresDelayed: scoresDelayed,
     challengeView: challengeView
   });

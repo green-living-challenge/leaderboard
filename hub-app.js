@@ -27,22 +27,23 @@
   var useState = React.useState;
   var useEffect = React.useEffect;
   var useCallback = React.useCallback;
+  var useRef = React.useRef;
 
   var store = D.safeStorage(function () { return window.localStorage; });
   var API_KEY = 'glc:v1:api';
+  var CSV_KEY = 'glc:v1:csv';
   var MY_HALL_KEY = 'glc:v1:myHall';
   var FALLBACK_NAME = 'Green Living Challenge';
 
-  function rememberedApi() {
-    var v = store.get(API_KEY);
+  function remembered(key) {
+    var v = store.get(key);
     return typeof v === 'string' && v ? v : null;
   }
 
-  // config.json -> API address. The last good address is remembered so a repeat
-  // visit can paint saved results before config.json has answered.
+  // config.json -> the API address and the public copy's published link. Both are
+  // remembered, so a repeat visit can start loading before config.json has answered.
   function useConfig() {
-    var initial = rememberedApi();
-    var s = useState({ loading: true, api: initial, error: null });
+    var s = useState({ loading: true, api: remembered(API_KEY), csv: remembered(CSV_KEY), error: null });
     var state = s[0];
     var setState = s[1];
     var a = useState(0);
@@ -50,14 +51,17 @@
     var setAttempt = a[1];
     useEffect(function () {
       var cancelled = false;
-      setState(function (prev) { return { loading: true, api: prev.api, error: null }; });
+      setState(function (prev) { return { loading: true, api: prev.api, csv: prev.csv, error: null }; });
       D.loadConfig(window.fetch.bind(window), window.location.href).then(function (res) {
         if (cancelled) return;
         if (res.ok) {
           store.set(API_KEY, res.api);
-          setState({ loading: false, api: res.api, error: null });
+          store.set(CSV_KEY, res.csv);
+          setState({ loading: false, api: res.api, csv: res.csv, error: null });
         } else {
-          setState(function (prev) { return { loading: false, api: prev.api, error: prev.api ? null : res.error }; });
+          setState(function (prev) {
+            return { loading: false, api: prev.api, csv: prev.csv, error: prev.api ? null : res.error };
+          });
         }
       });
       return function () { cancelled = true; };
@@ -66,9 +70,17 @@
     return [state, retry];
   }
 
-  // One payload: the saved copy at once, then a fresh copy in the background.
-  // Returns [entry, retry]. entry: { key, payload, fromCache, loading, slow, error } or null.
-  function useResource(api, route, id) {
+  // One payload: the saved copy at once, then a fresh one in the background, read
+  // from the public copy first and the API second (D.loadPayload). gid is the
+  // challenge's tab in the public copy. wait holds the fresh read back until the
+  // registry has answered, so a challenge opened from a link learns its tab first.
+  // skipCopy(), if given, is asked once as each read starts: a read already under
+  // way is never restarted because its answer changed.
+  // Returns [entry, retry]. entry: { key, payload, fromCache, loading, slow, error, source } or null,
+  // where source ('copy' or 'api') says where the last fresh payload came from.
+  function useResource(config, route, id, gid, wait, skipCopy) {
+    var api = config.api;
+    var csv = config.csv || null;
     var key = api && (route === 'registry' || id) ? L.cacheKey(api, route, id) : null;
     var s = useState(null);
     var entry = s[0];
@@ -84,22 +96,30 @@
       var cancelled = false;
       var saved = store.get(key);
       var savedPayload = saved && L.checkPayload(saved.payload, route, id).ok ? saved.payload : null;
+      var shown = entry && entry.key === key && entry.payload ? entry.payload : savedPayload;
       setEntry(function (prev) {
-        var keep = prev && prev.key === key && prev.payload ? prev.payload : null;
-        var payload = keep || savedPayload;
-        return { key: key, payload: payload, fromCache: !!payload, loading: true, slow: false, error: null };
+        var same = prev && prev.key === key;
+        var payload = (same && prev.payload) || savedPayload;
+        return { key: key, payload: payload, fromCache: !!payload, loading: true, slow: false, error: null,
+          source: same ? prev.source : undefined };
       });
+      if (wait) return function () { cancelled = true; };
       var slowTimer = setTimeout(function () {
         setEntry(function (e) { return e && e.key === key && e.loading ? Object.assign({}, e, { slow: true }) : e; });
       }, L.TIMING.slowMs);
-      var url = D.buildUrl(api, route, id, window.location.href);
-      D.fetchJson(url, { fetchImpl: window.fetch.bind(window), timeoutMs: L.TIMING.giveUpMs }).then(function (res) {
+      D.loadPayload({
+        api: api, csv: csv, route: route, id: id, gid: skipCopy && skipCopy() ? null : gid, base: window.location.href,
+        fetchImpl: window.fetch.bind(window),
+        check: function (json) { return L.checkPayload(json, route, id); },
+        copyMs: L.TIMING.copyMs, giveUpMs: L.TIMING.giveUpMs
+      }).then(function (res) {
         clearTimeout(slowTimer);
         if (cancelled) return;
         var checked = res.ok ? L.checkPayload(res.json, route, id) : { ok: false, error: res.error };
         if (checked.ok) {
-          store.set(key, { savedAt: Date.now(), payload: checked.payload });
-          setEntry({ key: key, payload: checked.payload, fromCache: false, loading: false, slow: false, error: null });
+          var payload = L.newerPayload(shown, checked.payload);
+          store.set(key, { savedAt: Date.now(), payload: payload });
+          setEntry({ key: key, payload: payload, fromCache: false, loading: false, slow: false, error: null, source: res.source });
         } else {
           setEntry(function (e) {
             return Object.assign({}, e, { key: key, loading: false, slow: false, error: checked.error });
@@ -110,7 +130,7 @@
         cancelled = true;
         clearTimeout(slowTimer);
       };
-    }, [key, attempt]);
+    }, [key, attempt, csv, gid, wait]);
     var retry = useCallback(function () { setAttempt(function (n) { return n + 1; }); }, []);
     return [entry && entry.key === key ? entry : null, retry];
   }
@@ -136,18 +156,23 @@
     });
     var tabState = useState(null);
 
-    var r = useResource(config.api, 'registry', null);
+    var r = useResource(config, 'registry', null, 0, false);
     var registryEntry = r[0];
     var retryRegistry = r[1];
     var registry = registryEntry && registryEntry.payload;
     var nowMs = Date.now();
     var today = L.todayInDubai(nowMs);
     var selectedId = route.id || (registry ? L.pickDefault(registry, today) : null);
-    var ch = useResource(config.api, 'challenge', selectedId);
+    var descriptor = registry && selectedId ? L.findChallenge(registry, selectedId) : null;
+    // With a public copy, a challenge waits until the registry, which names its tab, has answered.
+    // A challenge read that starts after the registry had to come from the API skips the copy too.
+    var registryAnswered = !!(registryEntry && (registryEntry.payload || registryEntry.error));
+    var registryFromApi = useRef(false);
+    registryFromApi.current = !!(registryEntry && registryEntry.source === 'api');
+    var ch = useResource(config, 'challenge', selectedId, config.csv && descriptor ? descriptor.csvGid : null,
+      !!config.csv && !registryAnswered, function () { return registryFromApi.current; });
     var challengeEntry = ch[0];
     var retryChallenge = ch[1];
-
-    var descriptor = registry && selectedId ? L.findChallenge(registry, selectedId) : null;
     var payload = challengeEntry && challengeEntry.payload;
     var view = descriptor ? L.challengeView(descriptor, payload, registry, nowMs) : null;
     var program = registry && registry.program ? registry.program : {};

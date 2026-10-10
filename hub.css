@@ -9,6 +9,12 @@
   --glc-accent: #F59E0B;
   --glc-on-header: #FFFFFF;
   --glc-on-accent: #111827;
+  --glc-page: #F8FAFC;
+  --glc-ink: #0F172A;
+  --glc-muted: #555B69;
+  --glc-line: #D5D9DF;
+  --glc-card: #FCFDFE;
+  --glc-on-ink: #FFFFFF;
 }
 
 html { -webkit-text-size-adjust: 100%; }
@@ -34,6 +40,18 @@ body {
 
 .glc-hero { background: linear-gradient(135deg, var(--glc-from), var(--glc-to)); color: var(--glc-on-header); }
 .glc-accent { background: var(--glc-accent); color: var(--glc-on-accent); }
+
+/* Theme classes. hub-ui.js uses these instead of fixed colours so a theme recolours the page. */
+.glc-root { background: var(--glc-page); color: var(--glc-ink); min-height: 100vh; }
+.glc-themed .shell-header { background: linear-gradient(135deg, var(--glc-from), var(--glc-to)); color: var(--glc-on-header); }
+.glc-card { background: var(--glc-card); }
+.glc-ink { color: var(--glc-ink); }
+.glc-muted { color: var(--glc-muted); }
+.glc-line { border-color: var(--glc-line); }
+.glc-track { background: var(--glc-line); }
+.glc-disc { background: var(--glc-ink); color: var(--glc-on-ink); }
+.glc-pill { border: 1px solid currentColor; color: inherit; }
+.glc-pill-on { background: var(--glc-on-header); color: var(--glc-from); border-color: var(--glc-on-header); }
 .glc-badge { display: inline-flex; align-items: center; gap: 0.375rem; border-radius: 9999px; background: #FFFFFF; color: #111827; padding: 0.125rem 0.625rem; font-size: 0.8125rem; font-weight: 700; }
 .glc-dot { width: 0.5rem; height: 0.5rem; border-radius: 9999px; background: #16A34A; }
 .glc-badge-live .glc-dot { animation: glc-pulse 1.6s ease-in-out infinite; }
@@ -52,3 +70,33 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/* The hand font (October spec section 13). Vendored, SIL OFL, used only when a theme asks for it. */
+@font-face {
+  font-family: 'Gochi Hand';
+  src: url('vendor/gochi-hand-latin.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+.glc-font-hand .glc-heading { font-family: 'Gochi Hand', cursive; letter-spacing: 0.01em; }
+
+/* Ticket style: the hero is a stub in the card colour with zigzag edges and a dashed rule. */
+.glc-hero { position: relative; }
+.glc-zigzag { position: absolute; left: 0; right: 0; width: 100%; height: 10px; }
+.glc-zigzag-top { top: -10px; }
+.glc-zigzag-bottom { bottom: -10px; transform: scaleY(-1); }
+.glc-style-standard .glc-zigzag, .glc-style-standard .glc-kicker, .glc-style-standard .glc-ticket-rule { display: none; }
+.glc-style-ticket .glc-hero { background: var(--glc-card); color: var(--glc-ink); border-radius: 0; box-shadow: none; margin: 10px 0; }
+.glc-style-ticket .glc-hero-icon { background: var(--glc-accent); color: var(--glc-on-accent); }
+.glc-style-ticket .glc-hero-title { font-size: 2.75rem; line-height: 1.05; text-shadow: 3px 3px 0 rgba(0, 0, 0, 0.18); }
+.glc-ticket-rule { border: 0; border-top: 3px dashed currentColor; opacity: 0.7; margin: 0.75rem 0; }
+
+/* The route bar (October spec section 16): ticks per stop, a marker at the position. */
+.glc-tick { background: var(--glc-muted); }
+.glc-marker { border-color: var(--glc-card); box-shadow: 0 0 0 1px var(--glc-muted); }
+.glc-row summary { list-style: none; cursor: pointer; }
+.glc-row summary::-webkit-details-marker { display: none; }
+
+/* The department logos in the footer: path data from hub-logos.js, coloured by the text colour. */
+.glc-logo { height: 28px; width: auto; display: block; }

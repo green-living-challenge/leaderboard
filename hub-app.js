@@ -33,6 +33,7 @@
   var API_KEY = 'glc:v1:api';
   var CSV_KEY = 'glc:v1:csv';
   var MY_HALL_KEY = 'glc:v1:myHall';
+  var DIVISION_KEY = 'glc:v1:division';
   var FALLBACK_NAME = 'Green Living Challenge';
 
   function remembered(key) {
@@ -155,6 +156,10 @@
       return typeof v === 'string' ? v : '';
     });
     var tabState = useState(null);
+    var divisionState = useState(function () {
+      var v = store.get(DIVISION_KEY);
+      return typeof v === 'string' ? v : '';
+    });
 
     var r = useResource(config, 'registry', null, 0, false);
     var registryEntry = r[0];
@@ -174,18 +179,33 @@
     var challengeEntry = ch[0];
     var retryChallenge = ch[1];
     var payload = challengeEntry && challengeEntry.payload;
-    var view = descriptor ? L.challengeView(descriptor, payload, registry, nowMs) : null;
     var program = registry && registry.program ? registry.program : {};
     var programName = typeof program.name === 'string' && program.name.trim() ? program.name.trim() : FALLBACK_NAME;
+    var division = registry ? L.pickDivision(divisionState[0], hallState[0], registry.halls) : '';
+    var view = descriptor ? L.challengeView(descriptor, payload, registry, nowMs, division, programName) : null;
+    var theme = view ? view.theme : L.themeVars(null);
+    var themeClasses = view ? view.themeClasses : L.themeClasses(null);
+    // The browser chrome follows the challenge theme only once a challenge shows; before that,
+    // and on error pages, the header and the chrome keep the program's maroon.
+    useEffect(function () {
+      var meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.setAttribute('content', view ? theme['--glc-from'] : '#4A1526');
+    }, [view ? theme['--glc-from'] : '']);
 
     useEffect(function () { tabState[1](null); }, [selectedId]);
     useEffect(function () {
       document.title = view ? view.name + ' | ' + programName : programName;
     }, [view && view.name, programName]);
 
+    function setDivision(key) {
+      divisionState[1](key);
+      store.set(DIVISION_KEY, key);
+    }
     function setMyHall(code) {
       hallState[1](code);
       store.set(MY_HALL_KEY, code);
+      var group = L.groupOfHall(registry ? registry.halls : [], code);
+      if (group) setDivision(group);
     }
     function retryAll() {
       retryRegistry();
@@ -219,7 +239,7 @@
       var body;
       if (chScreen.screen === 'data') {
         body = html`<${UI.ChallengeBody} view=${view} tab=${tabState[0]} setTab=${tabState[1]}
-          myHall=${hallState[0]} setMyHall=${setMyHall} />`;
+          myHall=${hallState[0]} setMyHall=${setMyHall} division=${division} setDivision=${setDivision} />`;
       } else if (chScreen.screen === 'error') {
         body = html`<${UI.ErrorCard} message=${L.errorText(challengeEntry.error)} onRetry=${retryChallenge} />`;
       } else {
@@ -231,13 +251,15 @@
     var groups = registry ? L.groupChallenges(registry, today) : { current: [], past: [] };
     var form = view && registry ? view.form : null;
     return html`
-      <${UI.ShellHeader} programName=${programName}>
-        <${UI.Switcher} groups=${groups} selectedId=${selectedId} />
-      <//>
-      <main className=${'mx-auto max-w-3xl px-4 pt-4 ' + (form ? 'pb-28' : 'pb-8')}>${main}</main>
-      <${UI.Footer} updated=${view && payload ? view.updated : ''} org=${typeof program.org === 'string' ? program.org : ''}
-        guideUrl=${L.safeUrl(program.guideUrl)} />
-      <${UI.SubmitBar} form=${form} />`;
+      <div className=${'glc-root ' + themeClasses + (view ? ' glc-themed' : '') + (form ? ' pb-28' : '')} style=${theme}>
+        <${UI.ShellHeader} programName=${programName}>
+          <${UI.Switcher} groups=${groups} selectedId=${selectedId} />
+        <//>
+        <main className="mx-auto max-w-3xl px-4 pt-4 pb-8">${main}</main>
+        <${UI.Footer} updated=${view && payload ? view.updated : ''} org=${typeof program.org === 'string' ? program.org : ''}
+          guideUrl=${L.safeUrl(program.guideUrl)} whatsappUrl=${L.safeUrl(program.whatsappUrl)} contactEmail=${L.contactAddress(program.contactEmail)} />
+        <${UI.SubmitBar} form=${form} />
+      </div>`;
   }
 
   // A render error shows a message instead of a blank page.

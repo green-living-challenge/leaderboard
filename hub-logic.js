@@ -18,6 +18,7 @@
   var TIMING = { slowMs: 4000, giveUpMs: 20000, staleSyncMinutes: 30, copyMs: 6000 };
   var STATES = ['upcoming', 'live', 'ended', 'final'];
   var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   var DAY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
   var ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
@@ -222,6 +223,10 @@
   var LIGHT_TEXT = '#FFFFFF';
   var NEUTRAL_HALL = '#64748B';
   var DEFAULT_THEME = { headerFrom: '#065F46', headerTo: '#0F766E', accent: '#F59E0B' };
+  var DEFAULT_PAGE = '#F8FAFC';
+  var DEFAULT_INK = '#0F172A';
+  var THEME_STYLES = ['standard', 'ticket'];
+  var THEME_FONTS = ['standard', 'hand'];
   var numberFormat = new Intl.NumberFormat('en-US');
 
   function formatNumber(n) {
@@ -236,13 +241,13 @@
     return Math.min(100, Math.round((p / m) * 100));
   }
 
-  // One tile per number the payload gives. A non-competitive payload has no points.
-  function statTiles(totals) {
+  // One tile per number the payload gives, the last one named after the unit (Points, Steps).
+  function statTiles(totals, unit) {
     var t = isObject(totals) ? totals : {};
     return [
       { key: 'participants', label: 'Participants' },
       { key: 'submissions', label: 'Submissions' },
-      { key: 'points', label: 'Points' }
+      { key: 'points', label: capitalise(unitWord(unit, 2)) }
     ].filter(function (tile) {
       return typeof t[tile.key] === 'number' && isFinite(t[tile.key]);
     }).map(function (tile) {
@@ -274,7 +279,9 @@
         name: text(s.name) || 'Resident',
         hall: text(s.hall),
         points: num(s.points),
-        rank: s.rank
+        rank: s.rank,
+        activeDays: num(s.activeDays),
+        daysText: daysText(s.activeDays)
       };
     });
     if (rows.length && rows.every(hasValidRank)) return rows;
@@ -334,19 +341,59 @@
     return worst(LIGHT_TEXT) >= worst(DARK_TEXT) ? LIGHT_TEXT : DARK_TEXT;
   }
 
-  // Descriptor theme -> CSS custom properties. Bad or missing colours fall back to Emerald.
+  function toHex(rgb) {
+    return '#' + rgb.map(function (v) {
+      var h = Math.max(0, Math.min(255, Math.round(v))).toString(16).toUpperCase();
+      return h.length === 1 ? '0' + h : h;
+    }).join('');
+  }
+
+  // The colour t of the way from a to b (0 gives a, 1 gives b, clamped). A bad a comes back as it is.
+  function mixHex(a, b, t) {
+    var ra = parseHex(a);
+    var rb = parseHex(b);
+    if (!ra) return a;
+    if (!rb) return toHex(ra);
+    var k = Math.max(0, Math.min(1, num(t)));
+    return toHex(ra.map(function (v, i) { return v + (rb[i] - v) * k; }));
+  }
+
+  // Descriptor theme -> CSS custom properties. Bad or missing colours fall back to Emerald on
+  // the default page. Muted text is 70 percent ink; if that does not read on the page, the ink is used.
   function themeVars(theme) {
     var t = isObject(theme) ? theme : {};
     var from = parseHex(t.headerFrom) ? t.headerFrom : DEFAULT_THEME.headerFrom;
     var to = parseHex(t.headerTo) ? t.headerTo : DEFAULT_THEME.headerTo;
     var accent = parseHex(t.accent) ? t.accent : DEFAULT_THEME.accent;
+    var page = parseHex(t.page) ? t.page : DEFAULT_PAGE;
+    var ink = parseHex(t.ink) ? t.ink : DEFAULT_INK;
+    var muted = mixHex(page, ink, 0.7);
+    if (contrastRatio(muted, page) < 4.5) muted = ink;
+    // Cards are the page nudged towards white. On a dark page with light ink that would wash
+    // the ink out, so such a theme gets cards only a shade lighter than its page.
+    var card = mixHex(page, '#FFFFFF', 0.6);
+    if (contrastRatio(ink, card) < 4.5) card = mixHex(page, '#FFFFFF', 0.08);
     return {
       '--glc-from': from,
       '--glc-to': to,
       '--glc-accent': accent,
       '--glc-on-header': readableTextOn(from, to),
-      '--glc-on-accent': readableTextOn(accent)
+      '--glc-on-accent': readableTextOn(accent),
+      '--glc-page': page,
+      '--glc-ink': ink,
+      '--glc-muted': muted,
+      '--glc-line': mixHex(page, ink, 0.15),
+      '--glc-card': card,
+      '--glc-on-ink': readableTextOn(ink)
     };
+  }
+
+  // Classes for the page root: the hero style and the heading font the theme asks for.
+  function themeClasses(theme) {
+    var t = isObject(theme) ? theme : {};
+    var style = THEME_STYLES.indexOf(t.style) >= 0 ? t.style : 'standard';
+    var font = THEME_FONTS.indexOf(t.font) >= 0 ? t.font : 'standard';
+    return 'glc-style-' + style + ' glc-font-' + font;
   }
 
   function hallIndex(registryHalls) {
@@ -405,7 +452,7 @@
     var index = hallIndex(registryHalls);
     return rows.map(function (r) {
       var style = hallStyle(index, r.hall);
-      return Object.assign({}, r, { hallColor: style.color, hallOnColor: style.onColor });
+      return Object.assign({}, r, { group: style.group, hallColor: style.color, hallOnColor: style.onColor });
     });
   }
 
@@ -443,17 +490,18 @@
   }
 
   // The line under the "My hall" picker. null when no hall is chosen.
-  function myHallText(rows, code) {
+  // where: an optional group label, named when the hall is ranked within a group the page is not showing.
+  function myHallText(rows, code, unit, where) {
     if (!code) return null;
     var list = rows || [];
     for (var i = 0; i < list.length; i++) {
       var r = list[i];
       if (r.code === code) {
-        return r.label + ' (' + r.code + ') is ranked ' + r.rank + ' of ' + list.length + ' with ' +
-          formatNumber(r.points) + ' points from ' + participantsText(r.participants) + '.';
+        return r.label + ' (' + r.code + ') is ranked ' + r.rank + ' of ' + list.length + (where ? ' in ' + where : '') + ' with ' +
+          formatNumber(r.points) + ' ' + unitWord(unit, r.points) + ' from ' + participantsText(r.participants) + '.';
       }
     }
-    return 'No points from this hall yet.';
+    return 'No ' + unitWord(unit, 2) + ' from this hall yet.';
   }
 
   Object.assign(api, {
@@ -467,6 +515,8 @@
     contrastRatio: contrastRatio,
     readableTextOn: readableTextOn,
     themeVars: themeVars,
+    mixHex: mixHex,
+    themeClasses: themeClasses,
     hallRows: hallRows,
     withHallColours: withHallColours,
     participantsText: participantsText,
@@ -509,11 +559,13 @@
     ['prizes', 'top'],
     ['podium', 'rankings'],
     ['rankedList', 'rankings'],
-    ['hallStandings', 'halls']
+    ['hallStandings', 'halls'],
+    ['route', 'route']
   ];
   var TABS = [
     { id: 'rankings', label: 'Rankings', icon: 'trophy' },
-    { id: 'halls', label: 'Halls', icon: 'building-2' }
+    { id: 'halls', label: 'Halls', icon: 'building-2' },
+    { id: 'route', label: 'Route', icon: 'map-pin' }
   ];
 
   // Which modules this challenge shows, given its descriptor and its loaded payload.
@@ -527,7 +579,8 @@
       prizes: !!text(d.prizes),
       podium: Array.isArray(p.students),
       rankedList: Array.isArray(p.students),
-      hallStandings: Array.isArray(p.halls)
+      hallStandings: Array.isArray(p.halls),
+      route: Array.isArray(p.halls) && routeMilestones(d).length >= 2
     };
     var top = [];
     var byTab = {};
@@ -634,13 +687,39 @@
   }
 
   // Everything the challenge page shows, as plain data. hub-ui.js only renders this.
-  function challengeView(descriptor, payload, registry, nowMs) {
+  // division: the key chosen on the page (hub-app.js picks it); it is checked against the
+  // registry here, so an unknown key falls back to the first group.
+  function challengeView(descriptor, payload, registry, nowMs, division, programName) {
     var d = isObject(descriptor) ? descriptor : {};
     var p = isObject(payload) ? payload : {};
     var regHalls = isObject(registry) ? registry.halls : [];
     var state = deriveState(d, todayInDubai(nowMs), p.final === true);
-    var rows = withHallColours(rankRows(p.students), regHalls);
-    var halls = hallRows(p.halls, regHalls);
+    var unit = unitLabel(d);
+    var groups = d.divisions === true ? divisionsFor(regHalls) : [];
+    var chosen = '';
+    if (groups.length) {
+      chosen = groups.some(function (g) { return g.key === division; }) ? division : groups[0].key;
+    }
+    var allRows = withHallColours(rankRows(p.students), regHalls);
+    var rows = chosen ? filterRows(allRows, chosen) : allRows;
+    var allHalls = hallRows(p.halls, regHalls);
+    var halls = chosen ? filterHalls(allHalls, chosen) : allHalls;
+    var stops = routeMilestones(d);
+    var route = null;
+    if (stops.length) {
+      route = {
+        stops: stops,
+        finish: stops[stops.length - 1],
+        cards: halls.map(function (h) {
+          var pos = routePosition(h.points, stops);
+          return Object.assign({}, h, { position: pos, text: routeText(pos, unit) });
+        })
+      };
+    }
+    rows = rows.map(function (r) {
+      var pos = route ? routePosition(r.points, stops) : null;
+      return Object.assign({}, r, { position: pos, trip: route ? tripText(r.points, pos, unit) : null });
+    });
     return {
       id: d.id,
       name: text(d.name) || 'Challenge',
@@ -650,20 +729,204 @@
       badge: badgeText(state, d.startDate),
       dates: formatRange(d.startDate, d.endDate),
       theme: themeVars(d.theme),
+      themeClasses: themeClasses(d.theme),
+      kicker: heroKicker(d.startDate, programName),
       prizes: text(d.prizes),
       layout: layoutFor(d, p),
-      stats: statTiles(p.totals),
+      stats: statTiles(p.totals, unit),
+      unit: unit,
+      divisions: chosen ? groups : [],
+      division: chosen,
+      noDivision: chosen ? noDivisionText(allRows) : null,
       rows: rows,
       maxPoints: rows.reduce(function (m, r) { return Math.max(m, r.points); }, 0),
       halls: halls,
+      allHalls: allHalls,
       maxHallPoints: halls.reduce(function (m, r) { return Math.max(m, r.points); }, 0),
-      hallFilters: hallFilters(regHalls),
+      hallFilters: chosen ? [] : hallFilters(regHalls),
       hallOptions: hallOptions(regHalls),
+      route: route,
       empty: emptyText(state, d.startDate),
       form: submitLink(d, state),
       updated: formatStamp(p.updatedAt)
     };
   }
+
+  // ---------- section D: units, divisions, the route, the kicker (October spec, sections 13 to 17) ----------
+
+  function capitalise(s) {
+    return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+  }
+
+  // The word for what the numbers count: the descriptor's unit, lowercased, else points.
+  function unitLabel(descriptor) {
+    var u = isObject(descriptor) ? text(descriptor.unit) : '';
+    return u ? u.toLowerCase() : 'points';
+  }
+
+  // 'steps' with 1 -> 'step'. 'points' with 3 -> 'points'. No unit means points.
+  function unitWord(unit, n) {
+    var u = text(unit).toLowerCase() || 'points';
+    return num(n) === 1 && /s$/.test(u) ? u.slice(0, -1) : u;
+  }
+
+  function daysText(n) {
+    var v = num(n);
+    return formatNumber(v) + (v === 1 ? ' day' : ' days');
+  }
+
+  // One entry per hall group in registry order, when there are at least two: the division switch.
+  function divisionsFor(registryHalls) {
+    var seen = [];
+    (Array.isArray(registryHalls) ? registryHalls : []).forEach(function (h) {
+      var g = isObject(h) ? text(h.group) : '';
+      if (g && seen.indexOf(g) < 0) seen.push(g);
+    });
+    if (seen.length < 2) return [];
+    return seen.map(function (g) { return { key: g, label: groupLabel(g) }; });
+  }
+
+  function groupOfHall(registryHalls, code) {
+    return hallStyle(hallIndex(registryHalls), text(code)).group;
+  }
+
+  // The division to show: the remembered one if it still exists, else the group of "My hall",
+  // else the first group. '' when the registry has fewer than two groups.
+  function pickDivision(remembered, myHall, registryHalls) {
+    var keys = divisionsFor(registryHalls).map(function (d) { return d.key; });
+    if (!keys.length) return '';
+    if (keys.indexOf(text(remembered)) >= 0) return text(remembered);
+    var mine = groupOfHall(registryHalls, myHall);
+    if (keys.indexOf(mine) >= 0) return mine;
+    return keys[0];
+  }
+
+  // Student rows of one division, re-ranked within it. No key: every row.
+  function filterRows(rows, key) {
+    if (!key) return rows || [];
+    return competitionRanks((rows || []).filter(function (r) { return r.group === key; }));
+  }
+
+  // The line under the ranked list about students who have no division. null when every row has one.
+  function noDivisionText(rows) {
+    var n = (rows || []).filter(function (r) { return !r.group; }).length;
+    if (!n) return null;
+    return n === 1 ? '1 participant has no hall yet and is not ranked.'
+      : formatNumber(n) + ' participants have no hall yet and are not ranked.';
+  }
+
+  // The descriptor's milestones, cleaned: a label and a finite count each, sorted, one per count,
+  // the first at 0 (a start is added when missing). [] unless two remain.
+  function routeMilestones(descriptor) {
+    var list = isObject(descriptor) && Array.isArray(descriptor.milestones) ? descriptor.milestones : [];
+    var stops = list.filter(function (m) {
+      return isObject(m) && text(m.label) && typeof m.units === 'number' && isFinite(m.units) && m.units >= 0;
+    }).map(function (m) {
+      return { label: text(m.label), units: m.units, icon: text(m.icon) || 'map-pin' };
+    });
+    stops.sort(function (a, b) { return a.units - b.units; });
+    var out = [];
+    stops.forEach(function (m) {
+      if (!out.length || out[out.length - 1].units !== m.units) out.push(m);
+    });
+    // A single listed stop is no route, even once a start is added for it.
+    if (out.length < 2) return [];
+    if (out[0].units !== 0) out.unshift({ label: 'Start', units: 0, icon: 'flag' });
+    return out;
+  }
+
+  // Where a count sits on the route: completed laps, the distance within the current lap, the
+  // last stop reached and the next one. null without a usable route.
+  function routePosition(units, milestones) {
+    var stops = Array.isArray(milestones) ? milestones : [];
+    if (stops.length < 2) return null;
+    var finish = stops[stops.length - 1].units;
+    if (!(finish > 0)) return null;
+    var total = Math.max(0, num(units));
+    var laps = Math.floor(total / finish);
+    var within = total - laps * finish;
+    var passed = stops[0];
+    var next = null;
+    for (var i = 0; i < stops.length; i++) {
+      if (stops[i].units <= within) passed = stops[i];
+      else if (!next) next = stops[i];
+    }
+    return {
+      finish: finish,
+      laps: laps,
+      within: within,
+      percent: Math.round((within / finish) * 1000) / 10,
+      passed: passed,
+      next: next,
+      toGo: next ? next.units - within : 0
+    };
+  }
+
+  // "Lap 2: Past Rain Room, 35,000 steps to Dubai Frame." "At" when the count is exactly on a stop.
+  function routeText(position, unit) {
+    if (!isObject(position) || !position.passed) return '';
+    var p = position;
+    var lap = p.laps >= 1 ? 'Lap ' + (p.laps + 1) + ': ' : '';
+    var where = (p.within === p.passed.units ? 'At ' : 'Past ') + p.passed.label;
+    var ahead = p.next ? ', ' + formatNumber(p.toGo) + ' ' + unitWord(unit, p.toGo) + ' to ' + p.next.label : '';
+    return lap + where + ahead + '.';
+  }
+
+  // The line inside a student's row: their total and where it puts them on the route.
+  function tripText(points, position, unit) {
+    var n = num(points);
+    return 'Your total: ' + formatNumber(n) + ' ' + unitWord(unit, n) + '. ' + routeText(position, unit);
+  }
+
+  // The "My hall" line for a page view. A hall from the division the page is not showing is
+  // ranked within its own group and the group is named, so the line is never false (review fix 2).
+  function myHallLine(view, code) {
+    var v = isObject(view) ? view : {};
+    if (!text(code)) return null;
+    var all = v.allHalls || v.halls || [];
+    var mine = all.filter(function (h) { return h.code === code; })[0];
+    if (v.division && mine && mine.group && mine.group !== v.division) {
+      return myHallText(filterHalls(all, mine.group), code, v.unit, groupLabel(mine.group).replace("'", '\u2019'));
+    }
+    return myHallText(v.halls, code, v.unit);
+  }
+
+  // The small line above a ticket-style title: { when: 'October 2026', name: 'Green Living Challenge' }.
+  function heroKicker(startDate, programName) {
+    var when = '';
+    if (isDay(startDate)) {
+      var m = DAY_RE.exec(startDate);
+      when = MONTH_NAMES[Number(m[2]) - 1] + ' ' + m[1];
+    }
+    return { when: when, name: text(programName) };
+  }
+
+  // The program's contact address, lowercased, or null: a plain address whose local part is
+  // not shaped like a student ID (spec section 17, the one address a payload may carry).
+  function contactAddress(value) {
+    var v = text(value).toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) return null;
+    if (/^[bg]0{2}\d{3,}@/.test(v)) return null;
+    return v;
+  }
+
+  Object.assign(api, {
+    unitLabel: unitLabel,
+    unitWord: unitWord,
+    daysText: daysText,
+    divisionsFor: divisionsFor,
+    groupOfHall: groupOfHall,
+    pickDivision: pickDivision,
+    filterRows: filterRows,
+    noDivisionText: noDivisionText,
+    routeMilestones: routeMilestones,
+    routePosition: routePosition,
+    routeText: routeText,
+    tripText: tripText,
+    heroKicker: heroKicker,
+    contactAddress: contactAddress,
+    myHallLine: myHallLine
+  });
 
   Object.assign(api, {
     MODULE_PLACES: MODULE_PLACES,

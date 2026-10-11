@@ -243,10 +243,16 @@
     return html`
       <div className="fixed inset-x-0 bottom-0 z-10 border-t glc-line glc-card px-4 pt-3"
         style=${{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}>
-        <a href=${props.form.url} target="_blank" rel="noopener noreferrer"
-          className="glc-accent mx-auto flex max-w-3xl items-center justify-center gap-2 rounded-xl px-4 py-3 text-base font-bold shadow">
-          <${Icon} name="send" className="w-5 h-5" />${props.form.label}<span className="sr-only"> (opens in a new tab)</span>
-        </a>
+        <div className="mx-auto flex max-w-3xl gap-2">
+          <a href=${props.form.url} target="_blank" rel="noopener noreferrer"
+            className="glc-accent flex flex-1 items-center justify-center gap-2 rounded-xl px-4 py-3 text-base font-bold shadow">
+            <${Icon} name="send" className="w-5 h-5" />${props.form.label}<span className="sr-only"> (opens in a new tab)</span>
+          </a>
+          ${props.guideUrl ? html`<a href=${props.guideUrl} target="_blank" rel="noopener noreferrer"
+            className="flex shrink-0 items-center justify-center gap-1.5 rounded-xl border-2 glc-line glc-ink px-3 py-3 text-sm font-semibold">
+            <${Icon} name="book-open" className="w-5 h-5" />Guide<span className="sr-only"> (opens in a new tab)</span>
+          </a>` : null}
+        </div>
       </div>`;
   }
 

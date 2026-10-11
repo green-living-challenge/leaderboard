@@ -258,7 +258,7 @@
         <main className="mx-auto max-w-3xl px-4 pt-4 pb-8">${main}</main>
         <${UI.Footer} updated=${view && payload ? view.updated : ''} org=${typeof program.org === 'string' ? program.org : ''}
           guideUrl=${L.safeUrl(program.guideUrl)} whatsappUrl=${L.safeUrl(program.whatsappUrl)} contactEmail=${L.contactAddress(program.contactEmail)} />
-        <${UI.SubmitBar} form=${form} />
+        <${UI.SubmitBar} form=${form} guideUrl=${L.safeUrl(program.guideUrl)} />
       </div>`;
   }
 

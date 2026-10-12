@@ -227,8 +227,60 @@
     });
   }
 
+  // ---------- the visit log (visit log spec, section 3) ----------
+
+  // A random device ID: 32 hex characters, or '' without a working crypto.getRandomValues.
+  function newDeviceId(cryptoObj) {
+    try {
+      var bytes = new Uint8Array(16);
+      cryptoObj.getRandomValues(bytes);
+      var out = '';
+      for (var i = 0; i < bytes.length; i++) out += (bytes[i] < 16 ? '0' : '') + bytes[i].toString(16);
+      return out;
+    } catch (e) {
+      return '';
+    }
+  }
+
+  // The device ID kept under key, or a new one kept now. '' when it cannot be kept (blocked
+  // storage): a browser that forgets sends no ID rather than a new one on every visit.
+  function deviceId(store, key, cryptoObj) {
+    var saved = store.get(key);
+    if (typeof saved === 'string' && /^[0-9a-f]{32}$/.test(saved)) return saved;
+    var id = newDeviceId(cryptoObj);
+    return id && store.set(key, id) ? id : '';
+  }
+
+  var TRACK_FIELDS = ['e', 'd', 'c', 's', 'r', 'v', 'm'];
+
+  // The beacon address: the API address with route=track and every field that has a value.
+  // fields: { e, d, c, s, r, v, m } (event, detail, challenge, source, referrer, device, screen).
+  function buildTrackUrl(api, fields, base) {
+    var u = new URL(api, base);
+    u.searchParams.set('route', 'track');
+    TRACK_FIELDS.forEach(function (k) {
+      var v = fields ? fields[k] : '';
+      if (typeof v === 'string' && v) u.searchParams.set(k, v);
+    });
+    return u.toString();
+  }
+
+  // Sends one beacon and forgets it: no waiting, no retry, and it never throws. The answer is
+  // read and dropped, since a browser keeps a request open until its body is read.
+  function sendTrack(url, fetchImpl) {
+    try {
+      Promise.resolve(fetchImpl(url, { method: 'GET', mode: 'no-cors', keepalive: true, credentials: 'omit',
+        cache: 'no-store', referrerPolicy: 'no-referrer' }))
+        .then(function (res) { return res && typeof res.text === 'function' ? res.text() : null; })
+        .catch(function () {});
+    } catch (e) {
+      // The visit log never breaks the page.
+    }
+  }
+
   return {
     safeStorage: safeStorage, buildUrl: buildUrl, fetchText: fetchText, fetchJson: fetchJson, loadConfig: loadConfig,
-    buildCsvUrl: buildCsvUrl, parseCsv: parseCsv, payloadFromCsv: payloadFromCsv, loadPayload: loadPayload
+    buildCsvUrl: buildCsvUrl, parseCsv: parseCsv, payloadFromCsv: payloadFromCsv, loadPayload: loadPayload,
+    newDeviceId: newDeviceId, deviceId: deviceId, buildTrackUrl: buildTrackUrl, sendTrack: sendTrack
   };
 });

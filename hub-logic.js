@@ -910,6 +910,81 @@
     return v;
   }
 
+  // ---------- the visit log (visit log spec, section 3) ----------
+
+  var SOURCE_RE = /^[a-z0-9][a-z0-9-]{0,29}$/;
+  var HOST_RE = /^[a-z0-9][a-z0-9.-]{0,99}$/;
+
+  // An address in parts: its query, and the hash cut at a '?' typed inside it ('#/c/<id>?src=wa').
+  function splitAddress(href) {
+    var u;
+    try {
+      u = new URL(href);
+    } catch (e) {
+      return null;
+    }
+    var hash = u.hash;
+    var q = hash.indexOf('?');
+    return {
+      url: u,
+      query: u.searchParams,
+      hashPath: q === -1 ? hash : hash.slice(0, q),
+      hashQuery: new URLSearchParams(q === -1 ? '' : hash.slice(q + 1))
+    };
+  }
+
+  // The src tag of an address, lowercased: from the query, else from inside the hash.
+  // '' when there is none or it does not match the Source pattern.
+  function readSource(href) {
+    var parts = splitAddress(href);
+    if (!parts) return '';
+    var v = parts.query.get('src');
+    if (v === null) v = parts.hashQuery.get('src');
+    v = typeof v === 'string' ? v.trim().toLowerCase() : '';
+    return SOURCE_RE.test(v) ? v : '';
+  }
+
+  // The address without its src tag, as path + query + hash for history.replaceState,
+  // keeping every other parameter. null when there is no tag to remove.
+  function withoutSource(href) {
+    var parts = splitAddress(href);
+    if (!parts || (!parts.query.has('src') && !parts.hashQuery.has('src'))) return null;
+    parts.query.delete('src');
+    parts.hashQuery.delete('src');
+    var search = parts.query.toString();
+    var hashSearch = parts.hashQuery.toString();
+    return parts.url.pathname + (search ? '?' + search : '') + parts.hashPath + (hashSearch ? '?' + hashSearch : '');
+  }
+
+  // document.referrer -> its host, lowercased. '' when empty, unreadable, not a plain host,
+  // or the hub's own host (a reload, or a link inside the hub).
+  function referrerHost(referrer, ownHost) {
+    if (typeof referrer !== 'string' || !referrer) return '';
+    var host;
+    try {
+      host = new URL(referrer).hostname.toLowerCase();
+    } catch (e) {
+      return '';
+    }
+    if (host === String(ownHost || '').toLowerCase()) return '';
+    return HOST_RE.test(host) ? host : '';
+  }
+
+  // The window's width in CSS pixels -> 'phone' (640 or less) or 'desktop'; '' when unknown.
+  function screenKind(width) {
+    if (typeof width !== 'number' || !(width > 0)) return '';
+    return width <= 640 ? 'phone' : 'desktop';
+  }
+
+  // A failed load -> the detail of its error beacon: 'registry:timeout', 'challenge:http-404',
+  // 'challenge:server-not_found'.
+  function errorDetail(area, error) {
+    var e = isObject(error) ? error : {};
+    var kind = text(e.kind) || 'unknown';
+    var extra = kind === 'server' ? text(e.code) : kind === 'http' ? String(num(e.status)) : '';
+    return (area + ':' + kind + (extra ? '-' + extra : '')).replace(/[^A-Za-z0-9_.:-]/g, '').slice(0, 60);
+  }
+
   Object.assign(api, {
     unitLabel: unitLabel,
     unitWord: unitWord,
@@ -925,7 +1000,12 @@
     tripText: tripText,
     heroKicker: heroKicker,
     contactAddress: contactAddress,
-    myHallLine: myHallLine
+    myHallLine: myHallLine,
+    readSource: readSource,
+    withoutSource: withoutSource,
+    referrerHost: referrerHost,
+    screenKind: screenKind,
+    errorDetail: errorDetail
   });
 
   Object.assign(api, {

@@ -1,5 +1,6 @@
 /* GLC hub: state, data loading and page assembly. Paints saved results at once,
-   refreshes in the background, and never logs or stores anything it was not given. */
+   refreshes in the background, and sends the anonymous visit log (visit log spec).
+   It stores nothing else it was not given. */
 (function () {
   'use strict';
 
@@ -35,11 +36,32 @@
   var MY_HALL_KEY = 'glc:v1:myHall';
   var DIVISION_KEY = 'glc:v1:division';
   var FALLBACK_NAME = 'Green Living Challenge';
+  var DEVICE_KEY = 'glc:v1:device';
 
   function remembered(key) {
     var v = store.get(key);
     return typeof v === 'string' && v ? v : null;
   }
+
+  // The visit log (visit log spec, section 3): this visit's channel tag, read once and removed
+  // from the address so that a copied link does not repeat it, the device ID, and the host of
+  // the page the visitor came from.
+  var visitInfo = (function () {
+    var href = window.location.href;
+    var clean = L.withoutSource(href);
+    if (clean !== null) {
+      try {
+        window.history.replaceState(window.history.state, '', clean);
+      } catch (e) {
+        // The address keeps its tag; the page works the same.
+      }
+    }
+    return {
+      source: L.readSource(href),
+      device: D.deviceId(store, DEVICE_KEY, window.crypto),
+      referrer: L.referrerHost(document.referrer, window.location.hostname)
+    };
+  })();
 
   // config.json -> the API address and the public copy's published link. Both are
   // remembered, so a repeat visit can start loading before config.json has answered.
@@ -179,6 +201,28 @@
     var challengeEntry = ch[0];
     var retryChallenge = ch[1];
     var payload = challengeEntry && challengeEntry.payload;
+    // The visit log: one track function for every event, reading the challenge shown when it is
+    // called. One visit per page load, once the API address is known, and one error per failed load.
+    var shown = useRef(null);
+    shown.current = selectedId;
+    var api = config.api;
+    var track = useCallback(function (event, detail) {
+      if (!api) return;
+      D.sendTrack(D.buildTrackUrl(api, {
+        e: event, d: detail || '', c: shown.current || '', s: visitInfo.source,
+        r: event === 'visit' ? visitInfo.referrer : '', v: visitInfo.device, m: L.screenKind(window.innerWidth)
+      }, window.location.href), window.fetch.bind(window));
+    }, [api]);
+    var visitSent = useRef(false);
+    useEffect(function () {
+      if (!api || visitSent.current) return;
+      visitSent.current = true;
+      track('visit');
+    }, [api]);
+    var registryFailure = registryEntry && registryEntry.error ? L.errorDetail('registry', registryEntry.error) : '';
+    var challengeFailure = challengeEntry && challengeEntry.error ? L.errorDetail('challenge', challengeEntry.error) : '';
+    useEffect(function () { if (registryFailure) track('error', registryFailure); }, [registryFailure]);
+    useEffect(function () { if (challengeFailure) track('error', challengeFailure); }, [challengeFailure]);
     var program = registry && registry.program ? registry.program : {};
     var programName = typeof program.name === 'string' && program.name.trim() ? program.name.trim() : FALLBACK_NAME;
     var division = registry ? L.pickDivision(divisionState[0], hallState[0], registry.halls) : '';
@@ -201,9 +245,19 @@
       divisionState[1](key);
       store.set(DIVISION_KEY, key);
     }
+    // A division pill. The switch that follows a My hall choice goes through setDivision and is not counted.
+    function chooseDivision(key) {
+      if (key !== division) track('division', key);
+      setDivision(key);
+    }
+    function chooseTab(id) {
+      if (id !== tabState[0]) track('tab', id);
+      tabState[1](id);
+    }
     function setMyHall(code) {
       hallState[1](code);
       store.set(MY_HALL_KEY, code);
+      if (code) track('hall', code);
       var group = L.groupOfHall(registry ? registry.halls : [], code);
       if (group) setDivision(group);
     }
@@ -238,8 +292,8 @@
       }
       var body;
       if (chScreen.screen === 'data') {
-        body = html`<${UI.ChallengeBody} view=${view} tab=${tabState[0]} setTab=${tabState[1]}
-          myHall=${hallState[0]} setMyHall=${setMyHall} division=${division} setDivision=${setDivision} />`;
+        body = html`<${UI.ChallengeBody} view=${view} tab=${tabState[0]} setTab=${chooseTab}
+          myHall=${hallState[0]} setMyHall=${setMyHall} division=${division} setDivision=${chooseDivision} track=${track} />`;
       } else if (chScreen.screen === 'error') {
         body = html`<${UI.ErrorCard} message=${L.errorText(challengeEntry.error)} onRetry=${retryChallenge} />`;
       } else {
@@ -253,12 +307,13 @@
     return html`
       <div className=${'glc-root ' + themeClasses + (view ? ' glc-themed' : '') + (form ? ' pb-28' : '')} style=${theme}>
         <${UI.ShellHeader} programName=${programName}>
-          <${UI.Switcher} groups=${groups} selectedId=${selectedId} />
+          <${UI.Switcher} groups=${groups} selectedId=${selectedId} track=${track} />
         <//>
         <main className="mx-auto max-w-3xl px-4 pt-4 pb-8">${main}</main>
         <${UI.Footer} updated=${view && payload ? view.updated : ''} org=${typeof program.org === 'string' ? program.org : ''}
-          guideUrl=${L.safeUrl(program.guideUrl)} whatsappUrl=${L.safeUrl(program.whatsappUrl)} contactEmail=${L.contactAddress(program.contactEmail)} />
-        <${UI.SubmitBar} form=${form} guideUrl=${L.safeUrl(program.guideUrl)} />
+          guideUrl=${L.safeUrl(program.guideUrl)} whatsappUrl=${L.safeUrl(program.whatsappUrl)} contactEmail=${L.contactAddress(program.contactEmail)}
+          track=${track} />
+        <${UI.SubmitBar} form=${form} guideUrl=${L.safeUrl(program.guideUrl)} track=${track} />
       </div>`;
   }
 

@@ -1,6 +1,7 @@
 /* GLC hub: React components, written with htm (no JSX, nothing compiled).
    Rendering only. Every decision comes from window.GLCLogic as plain data.
-   Nothing here logs, and nothing is inserted as HTML: React escapes all text. */
+   Nothing here logs: the clicks the visit log counts are handed to props.track.
+   Nothing is inserted as HTML: React escapes all text. */
 (function () {
   'use strict';
 
@@ -12,6 +13,11 @@
   // Module name -> component. hub-logic.js decides which names a challenge shows;
   // a name with no component here is skipped.
   var MODULES = {};
+
+  // Hands one visit log event to the page, when it gave a track function (visit log spec).
+  function fire(props, event, detail) {
+    if (typeof props.track === 'function') props.track(event, detail);
+  }
 
   // ---------- section 1: primitives, shell, loading and error states ----------
 
@@ -50,7 +56,8 @@
       (selected ? 'glc-pill glc-pill-on' : 'glc-pill hover:opacity-80');
     return html`
       <li>
-        <a href=${L.challengeHash(c.id)} aria-current=${selected ? 'page' : undefined} className=${cls}>
+        <a href=${L.challengeHash(c.id)} aria-current=${selected ? 'page' : undefined} className=${cls}
+          onClick=${function () { if (!selected) fire(props, 'challenge', c.id); }}>
           <${Icon} name=${c.icon} className="w-4 h-4 shrink-0" />
           <span className="glc-name">${c.name}</span>
         </a>
@@ -67,13 +74,13 @@
       <nav aria-label="Challenges" className="shell-inner pt-0">
         ${current.length ? html`
           <ul className="flex flex-wrap gap-2">
-            ${current.map(function (c) { return html`<${SwitcherLink} key=${c.id} challenge=${c} selectedId=${props.selectedId} />`; })}
+            ${current.map(function (c) { return html`<${SwitcherLink} key=${c.id} challenge=${c} selectedId=${props.selectedId} track=${props.track} />`; })}
           </ul>` : null}
         ${past.length ? html`
           <details className="mt-2" open=${pastSelected}>
             <summary className="cursor-pointer text-sm font-semibold">Past challenges (${past.length})</summary>
             <ul className="mt-2 flex flex-wrap gap-2">
-              ${past.map(function (c) { return html`<${SwitcherLink} key=${c.id} challenge=${c} selectedId=${props.selectedId} />`; })}
+              ${past.map(function (c) { return html`<${SwitcherLink} key=${c.id} challenge=${c} selectedId=${props.selectedId} track=${props.track} />`; })}
             </ul>
           </details>` : null}
       </nav>`;
@@ -244,11 +251,11 @@
       <div className="fixed inset-x-0 bottom-0 z-10 border-t glc-line glc-card px-4 pt-3"
         style=${{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}>
         <div className="mx-auto flex max-w-3xl gap-2">
-          <a href=${props.form.url} target="_blank" rel="noopener noreferrer"
+          <a href=${props.form.url} target="_blank" rel="noopener noreferrer" onClick=${function () { fire(props, 'submit'); }}
             className="glc-accent flex flex-1 items-center justify-center gap-2 rounded-xl px-4 py-3 text-base font-bold shadow">
             <${Icon} name="send" className="w-5 h-5" />${props.form.label}<span className="sr-only"> (opens in a new tab)</span>
           </a>
-          ${props.guideUrl ? html`<a href=${props.guideUrl} target="_blank" rel="noopener noreferrer"
+          ${props.guideUrl ? html`<a href=${props.guideUrl} target="_blank" rel="noopener noreferrer" onClick=${function () { fire(props, 'guide', 'bar'); }}
             className="flex shrink-0 items-center justify-center gap-1.5 rounded-xl border-2 glc-line glc-ink px-3 py-3 text-sm font-semibold">
             <${Icon} name="book-open" className="w-5 h-5" />Guide<span className="sr-only"> (opens in a new tab)</span>
           </a>` : null}
@@ -274,9 +281,9 @@
         </div>
         ${props.updated ? html`<p>Results last changed ${props.updated} (Dubai time)</p>` : null}
         ${props.org ? html`<p className="mt-1">${props.org}</p>` : null}
-        ${props.contactEmail ? html`<p className="mt-2">Questions? Email <a className="underline" href=${'mailto:' + props.contactEmail}>${props.contactEmail}</a></p>` : null}
-        ${props.whatsappUrl ? html`<p className="mt-1"><a className="underline" href=${props.whatsappUrl} target="_blank" rel="noopener noreferrer">Join the WhatsApp community</a></p>` : null}
-        ${props.guideUrl ? html`<p className="mt-1"><a className="underline" href=${props.guideUrl} target="_blank" rel="noopener noreferrer">Green Living Guide</a></p>` : null}
+        ${props.contactEmail ? html`<p className="mt-2">Questions? Email <a className="underline" href=${'mailto:' + props.contactEmail} onClick=${function () { fire(props, 'contact'); }}>${props.contactEmail}</a></p>` : null}
+        ${props.whatsappUrl ? html`<p className="mt-1"><a className="underline" href=${props.whatsappUrl} target="_blank" rel="noopener noreferrer" onClick=${function () { fire(props, 'whatsapp'); }}>Join the WhatsApp community</a></p>` : null}
+        ${props.guideUrl ? html`<p className="mt-1"><a className="underline" href=${props.guideUrl} target="_blank" rel="noopener noreferrer" onClick=${function () { fire(props, 'guide', 'footer'); }}>Green Living Guide</a></p>` : null}
       </footer>`;
   }
 
@@ -372,7 +379,7 @@
             }
             return html`
               <li key=${r.key} className="glc-row rounded-xl border glc-line glc-card">
-                <details>
+                <details onToggle=${function (e) { if (e.currentTarget.open) fire(props, 'trip'); }}>
                   <summary className="flex items-center gap-3 p-3">${line}<span className="sr-only">Show this student's trip</span></summary>
                   <div className="px-3 pb-3">
                     <${RouteBar} position=${r.position} stops=${v.route.stops} color=${r.hallColor} />
@@ -383,7 +390,7 @@
           })}
         </ol>
         ${v.rows.length > L.ROW_LIMIT ? html`
-          <button type="button" aria-expanded=${expanded} onClick=${function () { setExpanded(!expanded); }}
+          <button type="button" aria-expanded=${expanded} onClick=${function () { if (!expanded) fire(props, 'show_all'); setExpanded(!expanded); }}
             className="mt-3 w-full rounded-xl border glc-line glc-card py-2 font-semibold glc-ink">
             ${expanded ? 'Show top ' + L.ROW_LIMIT : 'Show all ' + v.rows.length}
           </button>` : null}

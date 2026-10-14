@@ -165,10 +165,13 @@
     return null;
   }
 
-  // '#/c/<id>' selects a challenge. Anything else, including '#/me/...' (slice 3),
-  // means "the default challenge". Only well-formed ids are ever sent to the API.
+  // '#/c/<id>' selects a challenge. '#/me', with or without a code after a '?', is the personal
+  // page (My page spec, section 4). Anything else means "the default challenge". Only well-formed
+  // ids are ever sent to the API.
   function parseHash(hash) {
-    var m = /^#\/c\/([^/?#]+)$/.exec(typeof hash === 'string' ? hash : '');
+    var h = typeof hash === 'string' ? hash : '';
+    if (/^#\/me(\?.*)?$/.test(h)) return { view: 'me', id: null };
+    var m = /^#\/c\/([^/?#]+)$/.exec(h);
     if (m) {
       var id;
       try {
@@ -1023,6 +1026,145 @@
     newerPayload: newerPayload,
     scoresDelayed: scoresDelayed,
     challengeView: challengeView
+  });
+
+  // ---------- My page (My page spec, section 4) ----------
+
+  var ME_TOKEN_RE = /^[0-9a-f]{32}$/;
+  var ME_CODE_RE = /^[0-9a-f]{20,320}\.[0-9a-f]{64}$/;
+  var IN_APP_RE = /Instagram|FBAN|FBAV/;
+  var ME_STATES = ['signed-out', 'exchanging', 'loading', 'ready', 'empty', 'invalid', 'error'];
+
+  // The sign-in code inside the hash ('#/me?code=...'), or '' when there is none or it is malformed.
+  function readCode(href) {
+    var parts = splitAddress(href);
+    if (!parts || parts.hashPath !== '#/me') return '';
+    var v = parts.hashQuery.get('code');
+    v = typeof v === 'string' ? v.trim() : '';
+    return ME_CODE_RE.test(v) ? v : '';
+  }
+
+  // The address without its code, for history.replaceState. null when there is no code to remove.
+  function withoutCode(href) {
+    var parts = splitAddress(href);
+    if (!parts || !parts.hashQuery.has('code')) return null;
+    parts.hashQuery.delete('code');
+    var search = parts.query.toString();
+    var hashSearch = parts.hashQuery.toString();
+    return parts.url.pathname + (search ? '?' + search : '') + parts.hashPath + (hashSearch ? '?' + hashSearch : '');
+  }
+
+  // The door's domain, from the /a/macros/<domain>/ part of its address, else ''.
+  function doorDomain(door) {
+    var m = /^https:\/\/script\.google\.com\/a\/macros\/([a-z0-9.-]+)\//i.exec(text(door));
+    return m ? m[1].toLowerCase() : '';
+  }
+
+  // Where "Sign in with AUS" goes: Google's account chooser with the domain hint and the door as
+  // the destination. null without an https door address.
+  function signinAddress(door) {
+    var d = safeUrl(text(door));
+    if (!d || d.indexOf('https://') !== 0) return null;
+    var domain = doorDomain(d);
+    return 'https://accounts.google.com/AccountChooser?continue=' + encodeURIComponent(d) + (domain ? '&hd=' + domain : '');
+  }
+
+  function inAppBrowser(userAgent) {
+    return IN_APP_RE.test(typeof userAgent === 'string' ? userAgent : '');
+  }
+
+  // 1 -> '1st', 2 -> '2nd', 11 -> '11th', 22 -> '22nd', 1001 -> '1,001st'.
+  function ordinal(n) {
+    var v = Math.max(0, Math.floor(num(n)));
+    var mod100 = v % 100;
+    var suffix = mod100 >= 11 && mod100 <= 13 ? 'th' : (['th', 'st', 'nd', 'rd'][v % 10] || 'th');
+    return formatNumber(v) + suffix;
+  }
+
+  // An answer of the me route -> the page's next state: { state, page?, token?, error? }.
+  function checkMe(json) {
+    if (!isObject(json)) return { state: 'error', error: { kind: 'parse' } };
+    if (json.ok === false) {
+      var err = isObject(json.error) ? json.error : {};
+      var code = text(err.code);
+      if (code === 'invalid_code' || code === 'invalid_token') return { state: 'invalid' };
+      return { state: 'error', error: { kind: 'server', code: code, message: text(err.message) } };
+    }
+    if (json.ok !== true || json.api !== 1) return { state: 'error', error: { kind: 'parse' } };
+    if (json.noEntries === true) return { state: 'empty' };
+    var page = isObject(json.page) ? json.page : (isObject(json.person) ? json : null);
+    if (!page || !isObject(page.person) || !isObject(page.totals)) return { state: 'error', error: { kind: 'parse' } };
+    var token = typeof json.token === 'string' && ME_TOKEN_RE.test(json.token) ? json.token : null;
+    return { state: 'ready', page: page, token: token };
+  }
+
+  // What the page shows, as text, from its payload. halls: the registry's halls, for labels.
+  function meView(page, halls) {
+    var p = isObject(page) ? page : {};
+    var person = isObject(p.person) ? p.person : {};
+    var totals = isObject(p.totals) ? p.totals : {};
+    var labels = {};
+    (Array.isArray(halls) ? halls : []).forEach(function (h) {
+      if (isObject(h) && text(h.code)) labels[text(h.code)] = text(h.label) || text(h.code);
+    });
+    var hall = text(person.hall);
+    var hallLabel = hall && hall !== 'Unknown' ? (text(person.hallLabel) || labels[hall] || hall) : '';
+    var units = {};
+    var challenges = (Array.isArray(p.challenges) ? p.challenges : []).filter(isObject).map(function (c) {
+      var unit = text(c.unit).toLowerCase();
+      units[text(c.id)] = unit;
+      var ranked = typeof c.rank === 'number' && c.rank > 0;
+      return {
+        id: text(c.id),
+        name: text(c.name) || text(c.id),
+        badge: c.status === 'closed' ? 'Closed' : 'Live',
+        rankText: ranked ? ordinal(c.rank) + ' of ' + formatNumber(c.of) : 'Not ranked yet',
+        pointsText: formatNumber(c.points) + ' ' + unitWord('points', num(c.points)),
+        unitsText: unit && typeof c.units === 'number' ? formatNumber(c.units) + ' ' + unitWord(unit, c.units) : '',
+        countedText: formatNumber(c.counted) + (num(c.counted) === 1 ? ' counted entry' : ' counted entries'),
+        streakText: isObject(c.streak) ? 'Streak ' + daysText(c.streak.current) + ', longest ' + daysText(c.streak.longest) : '',
+        hallText: isObject(c.hall) && text(c.hall.code)
+          ? 'Your hall, ' + (labels[text(c.hall.code)] || text(c.hall.code)) + ', is ' + ordinal(c.hall.rank) + ' of ' + formatNumber(c.hall.of)
+          : ''
+      };
+    });
+    var history = (Array.isArray(p.history) ? p.history : []).filter(isObject).map(function (e, i) {
+      var stamp = text(e.submittedAt);
+      var unit = units[text(e.challenge)] || '';
+      var sentDay = stamp.slice(0, 10);
+      var time = stamp.length >= 16 ? stamp.slice(11, 16) : '';
+      var day = isDay(e.day) ? e.day : sentDay;
+      // Yesterday's steps sent this morning read "13 Oct (sent 14 Oct, 09:00)".
+      var when = formatDay(day);
+      if (time) when += day === sentDay ? ', ' + time : ' (sent ' + formatDay(sentDay) + ', ' + time + ')';
+      return {
+        key: i,
+        when: when,
+        task: text(e.task),
+        answer: typeof e.answer === 'number' ? formatNumber(e.answer) + (unit ? ' ' + unitWord(unit, e.answer) : '') : '',
+        status: text(e.status),
+        reason: text(e.reason),
+        pointsText: num(e.points) > 0 ? '+' + formatNumber(e.points) : ''
+      };
+    });
+    return {
+      name: text(person.name) || 'Resident',
+      hallLabel: hallLabel,
+      tiles: [
+        { label: 'Points', value: formatNumber(totals.points) },
+        { label: 'Counted entries', value: formatNumber(totals.counted) },
+        { label: 'Active days', value: formatNumber(totals.activeDays) },
+        { label: 'Longest streak', value: daysText(totals.longestStreak) }
+      ],
+      challenges: challenges,
+      history: history,
+      updated: formatStamp(p.generatedAt)
+    };
+  }
+
+  Object.assign(api, {
+    ME_STATES: ME_STATES, readCode: readCode, withoutCode: withoutCode, doorDomain: doorDomain, signinAddress: signinAddress,
+    inAppBrowser: inAppBrowser, ordinal: ordinal, checkMe: checkMe, meView: meView
   });
 
   return api;

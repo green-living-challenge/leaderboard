@@ -44,6 +44,10 @@
         <div className="shell-inner flex items-center gap-2">
           <${Icon} name="leaf" className="w-5 h-5 shrink-0" />
           <p className="shell-title">${props.programName}</p>
+          ${props.myPage ? html`<a href=${props.myPage.href}
+            className="ml-auto flex shrink-0 items-center gap-1.5 rounded-lg border border-current px-2.5 py-1.5 text-xs font-semibold">
+            <${Icon} name=${props.myPage.icon} className="w-4 h-4" />${props.myPage.label}
+          </a>` : null}
         </div>
         ${props.children}
       </header>`;
@@ -284,7 +288,107 @@
         ${props.contactEmail ? html`<p className="mt-2">Questions? Email <a className="underline" href=${'mailto:' + props.contactEmail} onClick=${function () { fire(props, 'contact'); }}>${props.contactEmail}</a></p>` : null}
         ${props.whatsappUrl ? html`<p className="mt-1"><a className="underline" href=${props.whatsappUrl} target="_blank" rel="noopener noreferrer" onClick=${function () { fire(props, 'whatsapp'); }}>Join the WhatsApp community</a></p>` : null}
         ${props.guideUrl ? html`<p className="mt-1"><a className="underline" href=${props.guideUrl} target="_blank" rel="noopener noreferrer" onClick=${function () { fire(props, 'guide', 'footer'); }}>Green Living Guide</a></p>` : null}
+        ${props.myPage ? html`<p className="mt-1"><a className="underline" href=${props.myPage.href}>${props.myPage.label}</a></p>` : null}
       </footer>`;
+  }
+
+  // ---------- My page (My page spec, section 4) ----------
+
+  function MeCard(props) {
+    return html`<section role=${props.role || null} className=${'mt-4 rounded-2xl border glc-card p-5 text-center ' + (props.tone === 'alert' ? 'border-red-200' : 'glc-line')}>
+      <h1 className="text-xl font-bold glc-ink">${props.title}</h1>${props.children}</section>`;
+  }
+
+  function ForgetButton(props) {
+    return html`<button type="button" onClick=${props.onForget} className="mt-3 text-sm underline glc-muted">Forget me on this device</button>`;
+  }
+
+  // The seven states of the page. props.me is { state, page, error }; props.view is L.meView(page).
+  function MePage(props) {
+    var me = props.me || {};
+    var state = me.state;
+    if (state === 'signed-out' || state === 'invalid') {
+      return html`
+        <${MeCard} title="My page">
+          ${state === 'invalid' ? html`<p role="alert" className="mt-2 text-sm text-amber-900">That link is no longer valid. Sign in again.</p>` : null}
+          <p className="mt-2 text-sm glc-muted">Your points, your rank in each challenge, and every entry with its status.</p>
+          <p className="mt-1 text-sm glc-muted">Sign in with your AUS account once on this device.</p>
+          ${props.signinUrl ? html`<a href=${props.signinUrl} data-signin="1" onClick=${function () { fire(props, 'signin'); }}
+            className="glc-accent mt-4 inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-base font-bold shadow">
+            <${Icon} name="log-in" className="w-5 h-5" />Sign in with AUS</a>`
+          : html`<p className="mt-4 text-sm glc-muted">Sign-in is not set up yet.</p>`}
+          ${props.inApp ? html`<p className="mt-3 text-sm text-amber-900">Instagram's browser may block Google sign-in. Open this page in Chrome or Safari first.</p>` : null}
+          <p className="mt-4 text-xs glc-muted">Nothing is stored here but a random key. Forget me on this device removes it.</p>
+        <//>`;
+    }
+    if (state === 'exchanging' || state === 'loading') {
+      return html`
+        <div aria-busy="true" className="mt-4">
+          <p role="status" className="text-center text-sm glc-muted">${state === 'exchanging' ? 'Signing you in' : 'Loading your page'}</p>
+          <div className="glc-pulse mt-3 h-16 rounded-xl glc-track"></div>
+          <div className="glc-pulse mt-3 h-16 rounded-xl glc-track"></div>
+        </div>`;
+    }
+    if (state === 'empty') {
+      return html`
+        <${MeCard} title="My page">
+          <p className="mt-2 text-sm glc-muted">Nothing logged from this account yet.</p>
+          ${props.form ? html`<a href=${props.form.url} target="_blank" rel="noopener noreferrer" onClick=${function () { fire(props, 'submit'); }}
+            className="glc-accent mt-4 inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-base font-bold shadow">
+            <${Icon} name="send" className="w-5 h-5" />${props.form.label}<span className="sr-only"> (opens in a new tab)</span></a>` : null}
+          <p className="mt-3 text-sm glc-muted">After your first entry, sign in again to see it here. New entries can take up to ten minutes to appear.</p>
+        <//>`;
+    }
+    if (state === 'error' || !props.view) {
+      return html`
+        <${MeCard} title="Could not load your page" role="alert" tone="alert">
+          <p className="mt-2 text-sm glc-muted">${L.errorText(me.error)}</p>
+          <div><button type="button" onClick=${props.onRetry} className="mt-4 rounded-lg glc-disc px-5 py-2 font-semibold">Try again</button></div>
+          <${ForgetButton} onForget=${props.onForget} />
+        <//>`;
+    }
+    var v = props.view;
+    return html`
+      <section className="mt-4">
+        <div className="rounded-2xl border glc-line glc-card p-5">
+          <h1 className="text-2xl font-bold glc-ink">${v.name}</h1>
+          ${v.hallLabel ? html`<p className="mt-1 text-sm glc-muted">Hall ${v.hallLabel}</p>` : null}
+          <${ForgetButton} onForget=${props.onForget} />
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          ${v.tiles.map(function (t) {
+            return html`<div key=${t.label} className="rounded-xl border glc-line glc-card p-3">
+              <p className="text-xs glc-muted">${t.label}</p><p className="text-lg font-bold glc-ink">${t.value}</p></div>`;
+          })}
+        </div>
+        <h2 className="mt-5 text-lg font-bold glc-ink">Challenges</h2>
+        ${v.challenges.map(function (c) {
+          return html`
+            <div key=${c.id} className="mt-2 rounded-xl border glc-line glc-card p-4">
+              <div className="flex items-center justify-between gap-2">
+                <p className="font-bold glc-ink">${c.name}</p><span className="glc-badge text-xs">${c.badge}</span>
+              </div>
+              <p className="mt-1 text-sm glc-ink">${c.rankText}, ${c.pointsText}${c.unitsText ? ', ' + c.unitsText : ''}</p>
+              <p className="mt-1 text-xs glc-muted">${c.countedText}${c.streakText ? '. ' + c.streakText : ''}</p>
+              ${c.hallText ? html`<p className="mt-1 text-xs glc-muted">${c.hallText}</p>` : null}
+            </div>`;
+        })}
+        <h2 className="mt-5 text-lg font-bold glc-ink">History</h2>
+        <ul className="mt-2">
+          ${v.history.map(function (e) {
+            return html`
+              <li key=${e.key} className="border-b glc-line py-2 text-sm">
+                <div className="flex justify-between gap-2">
+                  <span className="glc-ink">${e.when}, ${e.task}${e.answer ? ', ' + e.answer : ''}</span>
+                  <span className="font-semibold glc-ink">${e.pointsText}</span>
+                </div>
+                <div className="text-xs glc-muted">${e.status}${e.reason ? ': ' + e.reason : ''}</div>
+              </li>`;
+          })}
+        </ul>
+        <p className="mt-4 text-xs glc-muted">Counted means the rules were met. Photos are not individually checked.</p>
+        ${v.updated ? html`<p className="mt-1 text-xs glc-muted">Updated ${v.updated} (Dubai time)</p>` : null}
+      </section>`;
   }
 
   // ---------- section 2: prizes, podium, ranked list, hall standings ----------
@@ -531,6 +635,7 @@
     ChallengeBody: ChallengeBody,
     SubmitBar: SubmitBar,
     Footer: Footer,
+    MePage: MePage,
     MODULES: MODULES
   };
 })();

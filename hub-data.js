@@ -213,9 +213,10 @@
     });
   }
 
-  // Reads config.json next to the page. Resolves to { ok: true, api, csv } or
+  // Reads config.json next to the page. Resolves to { ok: true, api, csv, signin } or
   // { ok: false, error: { kind: 'config' | 'noapi' } }. csv, the public copy's
-  // published link, is optional and null when missing.
+  // published link, and signin, the sign-in door's address, are optional and
+  // null when missing.
   function loadConfig(fetchImpl, base, timeoutMs) {
     var url = new URL('config.json', base).toString();
     return fetchJson(url, { fetchImpl: fetchImpl, timeoutMs: timeoutMs || 10000 }).then(function (res) {
@@ -223,7 +224,8 @@
       var api = typeof res.json.api === 'string' ? res.json.api.trim() : '';
       if (!api) return { ok: false, error: { kind: 'noapi' } };
       var csv = typeof res.json.csv === 'string' ? res.json.csv.trim() : '';
-      return { ok: true, api: api, csv: csv || null };
+      var signin = typeof res.json.signin === 'string' ? res.json.signin.trim() : '';
+      return { ok: true, api: api, csv: csv || null, signin: signin || null };
     });
   }
 
@@ -278,9 +280,34 @@
     }
   }
 
+  // ---------- My page (My page spec, section 4) ----------
+
+  // The me route address: the API address with route=me and a code, else a token.
+  function buildMeUrl(api, params, base) {
+    var u = new URL(api, base);
+    u.searchParams.set('route', 'me');
+    var p = params || {};
+    if (typeof p.code === 'string' && p.code) u.searchParams.set('code', p.code);
+    else if (typeof p.token === 'string' && p.token) u.searchParams.set('token', p.token);
+    return u.toString();
+  }
+
+  // One request to the me route, with one automatic second try after a network failure or a
+  // timeout. opts: { api, code, token, base, fetchImpl, timeoutMs }. Resolves to { ok: true, json }
+  // or { ok: false, error }; an answer with ok false is passed on as it is.
+  function loadMe(opts) {
+    var url = buildMeUrl(opts.api, { code: opts.code, token: opts.token }, opts.base);
+    var once = function () { return fetchJson(url, { fetchImpl: opts.fetchImpl, timeoutMs: opts.timeoutMs }); };
+    return once().then(function (res) {
+      if (res.ok || !res.error || (res.error.kind !== 'network' && res.error.kind !== 'timeout')) return res;
+      return once();
+    });
+  }
+
   return {
     safeStorage: safeStorage, buildUrl: buildUrl, fetchText: fetchText, fetchJson: fetchJson, loadConfig: loadConfig,
     buildCsvUrl: buildCsvUrl, parseCsv: parseCsv, payloadFromCsv: payloadFromCsv, loadPayload: loadPayload,
-    newDeviceId: newDeviceId, deviceId: deviceId, buildTrackUrl: buildTrackUrl, sendTrack: sendTrack
+    newDeviceId: newDeviceId, deviceId: deviceId, buildTrackUrl: buildTrackUrl, sendTrack: sendTrack,
+    buildMeUrl: buildMeUrl, loadMe: loadMe
   };
 });

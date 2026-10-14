@@ -1,6 +1,6 @@
 /* GLC hub: state, data loading and page assembly. Paints saved results at once,
    refreshes in the background, and sends the anonymous visit log (visit log spec).
-   It stores nothing else it was not given. */
+   It stores nothing else it was not given, except the My page token. */
 (function () {
   'use strict';
 
@@ -37,6 +37,9 @@
   var DIVISION_KEY = 'glc:v1:division';
   var FALLBACK_NAME = 'Green Living Challenge';
   var DEVICE_KEY = 'glc:v1:device';
+  var ME_KEY = 'glc:v1:me';
+  var SIGNIN_KEY = 'glc:v1:signin';
+  var ME_SETTLED = ['ready', 'empty', 'invalid', 'error'];
 
   function remembered(key) {
     var v = store.get(key);
@@ -63,10 +66,26 @@
     };
   })();
 
-  // config.json -> the API address and the public copy's published link. Both are
-  // remembered, so a repeat visit can start loading before config.json has answered.
+  // My page (My page spec, section 4): the sign-in code the door sent back ('#/me?code=...'),
+  // read once and removed from the address before anything else, so it is never copied along.
+  var arrivedCode = (function () {
+    var href = window.location.href;
+    var code = L.readCode(href);
+    var clean = L.withoutCode(href);
+    if (clean !== null) {
+      try {
+        window.history.replaceState(window.history.state, '', clean);
+      } catch (e) {
+        // The address keeps its code; the page works the same.
+      }
+    }
+    return code;
+  })();
+
+  // config.json -> the API address, the public copy's published link and the sign-in door's
+  // address. All three are remembered, so a repeat visit can start before config.json has answered.
   function useConfig() {
-    var s = useState({ loading: true, api: remembered(API_KEY), csv: remembered(CSV_KEY), error: null });
+    var s = useState({ loading: true, api: remembered(API_KEY), csv: remembered(CSV_KEY), signin: remembered(SIGNIN_KEY), error: null });
     var state = s[0];
     var setState = s[1];
     var a = useState(0);
@@ -74,16 +93,17 @@
     var setAttempt = a[1];
     useEffect(function () {
       var cancelled = false;
-      setState(function (prev) { return { loading: true, api: prev.api, csv: prev.csv, error: null }; });
+      setState(function (prev) { return { loading: true, api: prev.api, csv: prev.csv, signin: prev.signin, error: null }; });
       D.loadConfig(window.fetch.bind(window), window.location.href).then(function (res) {
         if (cancelled) return;
         if (res.ok) {
           store.set(API_KEY, res.api);
           store.set(CSV_KEY, res.csv);
-          setState({ loading: false, api: res.api, csv: res.csv, error: null });
+          store.set(SIGNIN_KEY, res.signin);
+          setState({ loading: false, api: res.api, csv: res.csv, signin: res.signin, error: null });
         } else {
           setState(function (prev) {
-            return { loading: false, api: prev.api, csv: prev.csv, error: prev.api ? null : res.error };
+            return { loading: false, api: prev.api, csv: prev.csv, signin: prev.signin, error: prev.api ? null : res.error };
           });
         }
       });
@@ -168,11 +188,74 @@
     return s[0];
   }
 
+  // My page: { state, page, error }. With a code in the address it is exchanged for the token,
+  // which is the only thing kept on the device; with a token on the device the page is fetched;
+  // with neither the page is signed out. active: whether the page is showing.
+  function useMe(config, active) {
+    var api = config.api;
+    // The arrived code is held until its exchange settles, so Try again after a failed request reuses it.
+    var codeRef = useRef(arrivedCode);
+    arrivedCode = '';
+    var s = useState({ state: codeRef.current ? 'exchanging' : (remembered(ME_KEY) ? 'loading' : 'signed-out'), page: null, error: null });
+    var me = s[0];
+    var setMe = s[1];
+    var a = useState(0);
+    var attempt = a[0];
+    var setAttempt = a[1];
+    useEffect(function () {
+      if (!active || !api) return undefined;
+      var code = codeRef.current;
+      var token = remembered(ME_KEY);
+      if (!code && !token) {
+        setMe({ state: 'signed-out', page: null, error: null });
+        return undefined;
+      }
+      var cancelled = false;
+      setMe(function (prev) {
+        if (code) return { state: 'exchanging', page: null, error: null };
+        // A page already shown for a token stays while a fresh one is fetched.
+        return prev.state === 'ready' && prev.page ? prev : { state: 'loading', page: null, error: null };
+      });
+      D.loadMe({ api: api, code: code, token: code ? '' : token, base: window.location.href,
+        fetchImpl: window.fetch.bind(window), timeoutMs: L.TIMING.giveUpMs }).then(function (res) {
+        if (cancelled) return;
+        var next = res.ok ? L.checkMe(res.json) : { state: 'error', error: res.error };
+        if (code) {
+          if (next.state === 'ready' && !next.token) next = { state: 'error', error: { kind: 'parse' } };
+          // A settled exchange replaces whatever token this device held: the new one, or none.
+          if (next.state !== 'error') {
+            codeRef.current = '';
+            store.set(ME_KEY, next.state === 'ready' ? next.token : null);
+          }
+        } else if (next.state === 'invalid') {
+          store.set(ME_KEY, null);
+        }
+        setMe(function (prev) {
+          // A refresh that failed keeps the page it had.
+          if (!code && next.state === 'error' && prev.state === 'ready' && prev.page) return prev;
+          return { state: next.state, page: next.page || null, error: next.error || null };
+        });
+      });
+      return function () { cancelled = true; };
+    }, [active, api, attempt]);
+    var retry = useCallback(function () { setAttempt(function (n) { return n + 1; }); }, []);
+    var forget = useCallback(function () {
+      store.set(ME_KEY, null);
+      setMe({ state: 'signed-out', page: null, error: null });
+    }, []);
+    return [me, retry, forget];
+  }
+
   function App() {
     var c = useConfig();
     var config = c[0];
     var retryConfig = c[1];
     var route = useHash();
+    var isMe = route.view === 'me';
+    var m = useMe(config, isMe);
+    var me = m[0];
+    var retryMe = m[1];
+    var forgetMe = m[2];
     var hallState = useState(function () {
       var v = store.get(MY_HALL_KEY);
       return typeof v === 'string' ? v : '';
@@ -223,6 +306,9 @@
     var challengeFailure = challengeEntry && challengeEntry.error ? L.errorDetail('challenge', challengeEntry.error) : '';
     useEffect(function () { if (registryFailure) track('error', registryFailure); }, [registryFailure]);
     useEffect(function () { if (challengeFailure) track('error', challengeFailure); }, [challengeFailure]);
+    var meSettled = isMe && ME_SETTLED.indexOf(me.state) !== -1 ? me.state : '';
+    useEffect(function () { if (meSettled) track('me', meSettled); }, [meSettled]);
+    function forget() { track('forget'); forgetMe(); }
     var program = registry && registry.program ? registry.program : {};
     var programName = typeof program.name === 'string' && program.name.trim() ? program.name.trim() : FALLBACK_NAME;
     var division = registry ? L.pickDivision(divisionState[0], hallState[0], registry.halls) : '';
@@ -238,8 +324,8 @@
 
     useEffect(function () { tabState[1](null); }, [selectedId]);
     useEffect(function () {
-      document.title = view ? view.name + ' | ' + programName : programName;
-    }, [view && view.name, programName]);
+      document.title = isMe ? 'My page | ' + programName : (view ? view.name + ' | ' + programName : programName);
+    }, [isMe, view && view.name, programName]);
 
     function setDivision(key) {
       divisionState[1](key);
@@ -266,9 +352,15 @@
       retryChallenge();
     }
 
+    var form = view && registry ? view.form : null;
+    var signinUrl = L.signinAddress(config.signin);
     var main;
     var regScreen = L.screenFor(registryEntry);
-    if (!config.api && config.error) {
+    if (isMe && config.api) {
+      main = html`<${UI.MePage} me=${me} view=${me.page ? L.meView(me.page, registry ? registry.halls : []) : null}
+        signinUrl=${signinUrl} inApp=${L.inAppBrowser(navigator.userAgent)} form=${form}
+        onForget=${forget} onRetry=${retryMe} track=${track} />`;
+    } else if (!config.api && config.error) {
       main = html`<${UI.ErrorCard} message=${L.errorText(config.error)} onRetry=${retryConfig} />`;
     } else if (!config.api || regScreen.screen === 'skeleton' || regScreen.screen === 'slow') {
       main = html`<${UI.Skeleton} slow=${regScreen.screen === 'slow'} />`;
@@ -303,16 +395,16 @@
     }
 
     var groups = registry ? L.groupChallenges(registry, today) : { current: [], past: [] };
-    var form = view && registry ? view.form : null;
+    var myPage = signinUrl ? (isMe ? { href: '#/', label: 'Results', icon: 'trophy' } : { href: '#/me', label: 'My page', icon: 'user' }) : null;
     return html`
       <div className=${'glc-root ' + themeClasses + (view ? ' glc-themed' : '') + (form ? ' pb-28' : '')} style=${theme}>
-        <${UI.ShellHeader} programName=${programName}>
+        <${UI.ShellHeader} programName=${programName} myPage=${myPage}>
           <${UI.Switcher} groups=${groups} selectedId=${selectedId} track=${track} />
         <//>
         <main className="mx-auto max-w-3xl px-4 pt-4 pb-8">${main}</main>
         <${UI.Footer} updated=${view && payload ? view.updated : ''} org=${typeof program.org === 'string' ? program.org : ''}
           guideUrl=${L.safeUrl(program.guideUrl)} whatsappUrl=${L.safeUrl(program.whatsappUrl)} contactEmail=${L.contactAddress(program.contactEmail)}
-          track=${track} />
+          myPage=${myPage} track=${track} />
         <${UI.SubmitBar} form=${form} guideUrl=${L.safeUrl(program.guideUrl)} track=${track} />
       </div>`;
   }

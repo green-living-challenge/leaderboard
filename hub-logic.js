@@ -1091,10 +1091,11 @@
       return { state: 'error', error: { kind: 'server', code: code, message: text(err.message) } };
     }
     if (json.ok !== true || json.api !== 1) return { state: 'error', error: { kind: 'parse' } };
-    if (json.noEntries === true) return { state: 'empty' };
+    var token = typeof json.token === 'string' && ME_TOKEN_RE.test(json.token) ? json.token : null;
+    // An exchange for an account whose page is not built yet still carries its token.
+    if (json.noEntries === true) return { state: 'empty', token: token };
     var page = isObject(json.page) ? json.page : (isObject(json.person) ? json : null);
     if (!page || !isObject(page.person) || !isObject(page.totals)) return { state: 'error', error: { kind: 'parse' } };
-    var token = typeof json.token === 'string' && ME_TOKEN_RE.test(json.token) ? json.token : null;
     return { state: 'ready', page: page, token: token };
   }
 

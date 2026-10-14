@@ -303,7 +303,7 @@
     return html`<button type="button" onClick=${props.onForget} className="mt-3 text-sm underline glc-muted">Forget me on this device</button>`;
   }
 
-  // The seven states of the page. props.me is { state, page, error }; props.view is L.meView(page).
+  // The seven states of the page. props.me is { state, page, error, held }; props.view is L.meView(page).
   function MePage(props) {
     var me = props.me || {};
     var state = me.state;
@@ -336,7 +336,9 @@
           ${props.form ? html`<a href=${props.form.url} target="_blank" rel="noopener noreferrer" onClick=${function () { fire(props, 'submit'); }}
             className="glc-accent mt-4 inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-base font-bold shadow">
             <${Icon} name="send" className="w-5 h-5" />${props.form.label}<span className="sr-only"> (opens in a new tab)</span></a>` : null}
-          <p className="mt-3 text-sm glc-muted">After your first entry, sign in again to see it here. New entries can take up to ten minutes to appear.</p>
+          ${me.held
+            ? html`<p className="mt-3 text-sm glc-muted">Entries show here a minute or two after you send them.</p><${ForgetButton} onForget=${props.onForget} />`
+            : html`<p className="mt-3 text-sm glc-muted">After your first entry, sign in again to see it here.</p>`}
         <//>`;
     }
     if (state === 'error' || !props.view) {

@@ -225,7 +225,7 @@
           // A settled exchange replaces whatever token this device held: the new one, or none.
           if (next.state !== 'error') {
             codeRef.current = '';
-            store.set(ME_KEY, next.state === 'ready' ? next.token : null);
+            store.set(ME_KEY, next.token || null);
           }
         } else if (next.state === 'invalid') {
           store.set(ME_KEY, null);
@@ -233,7 +233,8 @@
         setMe(function (prev) {
           // A refresh that failed keeps the page it had.
           if (!code && next.state === 'error' && prev.state === 'ready' && prev.page) return prev;
-          return { state: next.state, page: next.page || null, error: next.error || null };
+          // held: the device keeps a token, so the empty card offers Forget me instead of a new sign-in.
+          return { state: next.state, page: next.page || null, error: next.error || null, held: !!remembered(ME_KEY) };
         });
       });
       return function () { cancelled = true; };

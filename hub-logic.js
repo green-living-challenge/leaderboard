@@ -18,6 +18,8 @@
   var TIMING = { slowMs: 4000, giveUpMs: 20000, staleSyncMinutes: 30, copyMs: 6000 };
   var STATES = ['upcoming', 'live', 'ended', 'final'];
   var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September',
+    'October', 'November', 'December'];
   var MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   var DAY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
   var ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
@@ -105,6 +107,29 @@
     if (state === 'live') return 'Live';
     if (state === 'final') return 'Final results';
     return 'Ended, results being checked';
+  }
+
+  // Winner review spec (2026-11-06), section 7: the card shown while a ranked
+  // challenge is past its end date and not yet closed. null otherwise.
+  function endedNotice(descriptor, state, unit) {
+    var d = isObject(descriptor) ? descriptor : {};
+    if (state !== 'ended' || d.leaderboard !== 'ranked') return null;
+    var u = text(unit).toLowerCase() || 'points';
+    var span = '';
+    if (isDay(d.startDate) && isDay(d.endDate)) {
+      var a = DAY_RE.exec(d.startDate);
+      var b = DAY_RE.exec(d.endDate);
+      span = a[1] === b[1] && a[2] === b[2]
+        ? ' from ' + Number(a[3]) + ' to ' + Number(b[3]) + ' ' + MONTH_NAMES[Number(b[2]) - 1]
+        : ' from ' + formatDay(d.startDate) + ' to ' + formatDay(d.endDate);
+    }
+    var shows = u === 'points' ? 'is built from what each resident logged' : 'shows the ' + u + ' as each resident logged them';
+    return {
+      title: (text(d.name) || 'This challenge') + ' has ended',
+      text: 'Thank you to everyone who ' + (u === 'steps' ? 'walked with us' : 'took part') + span + '. The leaderboard ' +
+        shows + ', so a place on it is not yet a win. Before naming the winners, the team is checking the top entries ' +
+        'against their screenshots, and the standings may change. Stay tuned for the results.'
+    };
   }
 
   function emptyText(state, startDate) {
@@ -209,6 +234,7 @@
     formatStamp: formatStamp,
     deriveState: deriveState,
     badgeText: badgeText,
+    endedNotice: endedNotice,
     emptyText: emptyText,
     findChallenge: findChallenge,
     groupChallenges: groupChallenges,
@@ -730,6 +756,7 @@
       icon: text(d.icon) || 'leaf',
       state: state,
       badge: badgeText(state, d.startDate),
+      endedNotice: endedNotice(d, state, unit),
       dates: formatRange(d.startDate, d.endDate),
       theme: themeVars(d.theme),
       themeClasses: themeClasses(d.theme),

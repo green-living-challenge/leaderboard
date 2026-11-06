@@ -392,7 +392,8 @@
       } else {
         body = html`<${UI.Skeleton} slow=${chScreen.screen === 'slow'} />`;
       }
-      main = html`<${UI.Hero} view=${view} />${notes}${body}`;
+      var ended = view.endedNotice ? html`<${UI.EndedNotice} notice=${view.endedNotice} />` : null;
+      main = html`<${UI.Hero} view=${view} />${ended}${notes}${body}`;
     }
 
     var groups = registry ? L.groupChallenges(registry, today) : { current: [], past: [] };

@@ -125,6 +125,16 @@
       </section>`;
   }
 
+  // The card of an ended ranked challenge (hub-logic endedNotice).
+  function EndedNotice(props) {
+    var n = props.notice;
+    return html`
+      <section className="mt-3 rounded-xl border glc-line glc-card px-4 py-3" aria-labelledby="ended-title">
+        <h2 id="ended-title" className="text-base font-bold">${n.title}</h2>
+        <p className="mt-1 text-sm">${n.text}</p>
+      </section>`;
+  }
+
   // tone: 'info' or 'warn'. onRetry adds a "Try again" button.
   function Notice(props) {
     var cls = 'mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border px-3 py-2 text-sm ' +
@@ -631,6 +641,7 @@
     ShellHeader: ShellHeader,
     Switcher: Switcher,
     Hero: Hero,
+    EndedNotice: EndedNotice,
     Notice: Notice,
     Skeleton: Skeleton,
     ErrorCard: ErrorCard,
